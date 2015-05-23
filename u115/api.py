@@ -1180,6 +1180,21 @@ class Directory(BaseFile):
         self.name = r['name']
         self._count = r['count']
 
+    def download(self, path=None, show_progress=True, resume=True,
+                 auto_retry=True):
+        if path is None:
+            path = os.path.curdir
+        dest_path = os.path.join(path, self.name)
+        if os.path.exists(dest_path) and not os.path.isdir(dest_path):
+            raise APIError("Download error: {} exist and is not directory".format(dest_path))
+        try:
+            if not os.path.exists(dest_path):
+                os.makedirs(dest_path)
+        except Exception as e:
+            raise APIError("Download error: Cannot make dir {}".format(dest_path), e)
+        for f in self.list(count=self.count):
+            f.download(path=dest_path, show_progress=show_progress, resume=resume, auto_retry=auto_retry)
+
     def _load_entries(self, func, count, page=1, entries=None, **kwargs):
         """
         Load entries
