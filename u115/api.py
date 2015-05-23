@@ -345,6 +345,20 @@ class API(object):
             self._load_torrents_directory()
         return self._torrents_directory
 
+    def find_directory(self, path):
+        components = path.split("/")
+        curr_dir = self.root_directory
+        for c in components:
+            if len(c) == 0:
+                continue
+            for f in curr_dir.list(count=curr_dir.count):
+                if f.name == c and isinstance(f, Directory):
+                    curr_dir = f
+                    break
+            else:
+                return None
+        return curr_dir
+
     @property
     def task_count(self):
         """
