@@ -1004,6 +1004,13 @@ class BaseFile(Base):
         self.name = name
         self._deleted = False
 
+    def is_dir(self):
+        """
+        Check if this file is dir
+        :return: bool True if this file is a dir
+        """
+        pass
+
     def delete(self):
         """
         Delete this file or directory
@@ -1096,6 +1103,9 @@ class File(BaseFile):
         self._directory = None
         self._download_url = None
 
+    def is_dir(self):
+        return False
+
     @property
     def directory(self):
         """Directory that holds this file"""
@@ -1159,6 +1169,9 @@ class Directory(BaseFile):
             self.date_created = date_created
         self.pickcode = pickcode
         self._parent = None
+
+    def is_dir(self):
+        return True
 
     @property
     def is_root(self):
