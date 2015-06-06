@@ -1061,6 +1061,10 @@ class BaseFile(Base):
         else:
             raise APIError('Error in moving file/directory.')
 
+    @property
+    def parent(self):
+        """Parent dir of current node"""
+        return None
 
     @property
     def is_deleted(self):
@@ -1105,6 +1109,10 @@ class File(BaseFile):
 
     def is_dir(self):
         return False
+
+    @property
+    def parent(self):
+        return self.directory
 
     @property
     def directory(self):
