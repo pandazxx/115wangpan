@@ -455,7 +455,7 @@ class API(object):
         return _instantiate_uploaded_file(self, data2)
 
     def download(self, obj, path=None, show_progress=True, resume=True,
-                 auto_retry=True):
+                 auto_retry=True, low_speed_limit=-1, low_speed_time=-1):
         """
         Download a file
 
@@ -466,10 +466,20 @@ class API(object):
             identified by filename
         :param bool auto_retry: whether to retry automatically upon closed
             transfer until the file's download is finished
+        :param int low_speed_limit: corresponding to CURLOPT_LOW_SPEED_LIMIT in libcurl,
+            both low_speed_limit and low_speed_time should greater than 0 to
+            activate low_speed_limit
+        :param int low_speed_time: corresponding to CURLOPT_LOW_SPEED_TIME in libcurl,
+            see also low_speed_limit
         """
+        pass_through_opts = {}
+        if low_speed_time > 0 and low_speed_limit > 0:
+            import pycurl
+            pass_through_opts[pycurl.LOW_SPEED_LIMIT] = low_speed_limit
+            pass_through_opts[pycurl.LOW_SPEED_TIME] = low_speed_time
         download(obj.url, path=path, session=self.http.session,
                  show_progress=show_progress, resume=resume,
-                 auto_retry=auto_retry)
+                 auto_retry=auto_retry, pass_through_opts=pass_through_opts)
 
     def search(self, keyword, count=30):
         """
@@ -1116,9 +1126,10 @@ class File(BaseFile):
         return self.get_download_url()
 
     def download(self, path=None, show_progress=True, resume=True,
-                 auto_retry=True):
+                 auto_retry=True, low_speed_limit=-1, low_speed_time=-1):
         """Download this file"""
-        self.api.download(self, path, show_progress, resume, auto_retry)
+        self.api.download(self, path, show_progress, resume, auto_retry, low_speed_limit=low_speed_limit,
+                          low_speed_time=low_speed_time)
 
     @property
     def is_torrent(self):
@@ -1195,7 +1206,7 @@ class Directory(BaseFile):
         self._count = r['count']
 
     def download(self, path=None, show_progress=True, resume=True,
-                 auto_retry=True):
+                 auto_retry=True, low_speed_limit=-1, low_speed_time=-1):
         if path is None:
             path = os.path.curdir
         dest_path = os.path.join(path, self.name)
@@ -1207,7 +1218,8 @@ class Directory(BaseFile):
         except Exception as e:
             raise APIError("Download error: Cannot make dir {}".format(dest_path), e)
         for f in self.list(count=self.count):
-            f.download(path=dest_path, show_progress=show_progress, resume=resume, auto_retry=auto_retry)
+            f.download(path=dest_path, show_progress=show_progress, resume=resume, auto_retry=auto_retry,
+                       low_speed_time=low_speed_time, low_speed_limit=low_speed_limit)
 
     def _load_entries(self, func, count, page=1, entries=None, **kwargs):
         """
