@@ -359,6 +359,31 @@ class API(object):
                 return None
         return curr_dir
 
+    def walk(self, directory, topdown=True):
+        """
+        Walk through directory, partially implements os.walk
+        :param directory: root directory to walk through with
+        :param topdown: See also os.walk
+        :return: it yields a 3-tuple (current_dir, dirs, files).
+            current_dir is a Directory object,
+            dirs is a list of directories under current_dir,
+            files is a list of non-directories under current_dir.
+        """
+        files = directory.list(count=directory.count)
+        dirs, nondirs = [], []
+        for f in files:
+            if isinstance(f, Directory):
+                dirs.append(f)
+            else:
+                nondirs.append(f)
+        if topdown:
+            yield directory, dirs, nondirs
+        for d in dirs:
+            for x in self.walk(d, topdown):
+                yield x
+        if not topdown:
+            yield directory, dirs, nondirs
+
     @property
     def task_count(self):
         """
