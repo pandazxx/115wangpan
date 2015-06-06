@@ -1071,6 +1071,21 @@ class BaseFile(Base):
         """Whether this file or directory is deleted"""
         return self._deleted
 
+    @property
+    def abs_path(self):
+        """Absolute path of file/directory"""
+        node_list = []
+        curr_node = self
+        while True:
+            if curr_node is None or (curr_node.is_dir() and curr_node.is_root):
+                break
+            node_list.insert(0, curr_node.name)
+            curr_node = curr_node.parent
+        node_list.insert(0, "")
+        return "/".join(node_list)
+
+
+
     def __unicode__(self):
         return self.name
 
