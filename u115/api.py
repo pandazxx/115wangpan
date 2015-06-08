@@ -359,6 +359,31 @@ class API(object):
                 return None
         return curr_dir
 
+    def walk(self, directory, topdown=True):
+        """
+        Walk through directory, partially implements os.walk
+        :param directory: root directory to walk through with
+        :param topdown: See also os.walk
+        :return: it yields a 3-tuple (current_dir, dirs, files).
+            current_dir is a Directory object,
+            dirs is a list of directories under current_dir,
+            files is a list of non-directories under current_dir.
+        """
+        files = directory.list(count=directory.count)
+        dirs, nondirs = [], []
+        for f in files:
+            if isinstance(f, Directory):
+                dirs.append(f)
+            else:
+                nondirs.append(f)
+        if topdown:
+            yield directory, dirs, nondirs
+        for d in dirs:
+            for x in self.walk(d, topdown):
+                yield x
+        if not topdown:
+            yield directory, dirs, nondirs
+
     @property
     def task_count(self):
         """
@@ -1005,6 +1030,13 @@ class BaseFile(Base):
         self.name = name
         self._deleted = False
 
+    def is_dir(self):
+        """
+        Check if this file is dir
+        :return: bool True if this file is a dir
+        """
+        pass
+
     def delete(self):
         """
         Delete this file or directory
@@ -1056,9 +1088,29 @@ class BaseFile(Base):
             raise APIError('Error in moving file/directory.')
 
     @property
+    def parent(self):
+        """Parent dir of current node"""
+        return None
+
+    @property
     def is_deleted(self):
         """Whether this file or directory is deleted"""
         return self._deleted
+
+    @property
+    def abs_path(self):
+        """Absolute path of file/directory"""
+        node_list = []
+        curr_node = self
+        while True:
+            if curr_node is None or (curr_node.is_dir() and curr_node.is_root):
+                break
+            node_list.insert(0, curr_node.name)
+            curr_node = curr_node.parent
+        node_list.insert(0, "")
+        return "/".join(node_list)
+
+
 
     def __unicode__(self):
         return self.name
@@ -1095,6 +1147,13 @@ class File(BaseFile):
         self.pickcode = pickcode
         self._directory = None
         self._download_url = None
+
+    def is_dir(self):
+        return False
+
+    @property
+    def parent(self):
+        return self.directory
 
     @property
     def directory(self):
@@ -1159,6 +1218,9 @@ class Directory(BaseFile):
             self.date_created = date_created
         self.pickcode = pickcode
         self._parent = None
+
+    def is_dir(self):
+        return True
 
     @property
     def is_root(self):
