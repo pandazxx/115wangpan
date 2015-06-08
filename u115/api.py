@@ -565,6 +565,7 @@ class API(object):
         if res.state:
             return res.content
         else:
+            print(res.content.get('error_msg'))
             raise RequestFailure('Failed to open torrent.')
 
     def _req_lixian_add_task_bt(self, t):
@@ -1031,11 +1032,11 @@ class BaseFile(Base):
         else:
             raise APIError('This file or directory is already deleted.')
 
-    def move_to(self, directory):
+    def move(self, directory):
         """
-        Move this file to directory
-        :param directory: destination
-        :return: whether action successful
+        Move this file or directory to the destination directory
+        :param directory: destination directory
+        :return: whether the action is successful
         :raise: :class:`.APIError` if something bad happened
         """
         fcid = None
@@ -1053,7 +1054,6 @@ class BaseFile(Base):
             return True
         else:
             raise APIError('Error in moving file/directory.')
-
 
     @property
     def is_deleted(self):
