@@ -1241,6 +1241,17 @@ class Directory(BaseFile):
                 func=func, count=cur_count, page=page + 1,
                 entries=entries + loaded_entries, **kwargs)
 
+    def make_dir(self, dirname):
+        """
+        Make a new directory under current directory with dirname
+        :param dirname: the name of the new directory
+        :return: whether the new directory is successfully made
+        """
+        if self.api._req_files_add(self.cid, dirname):
+            return True
+        else:
+            raise APIError("Cannot make dir %s" % dirname)
+
     def list(self, count=30, order='user_ptime', asc=False, show_dir=True,
              natsort=True):
         """
