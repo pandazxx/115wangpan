@@ -1,5 +1,5 @@
 beautifulsoup4
-git+https://github.com/pandazxx/homura.git#egg=homura
+homura
 humanize
 requests
 six
