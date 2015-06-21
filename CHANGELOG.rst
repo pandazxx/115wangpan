@@ -1,6 +1,36 @@
 Changelog
 =========
 
+0.7.4 (2015-06-20)
+------------------
+
+- Fixed getting download URL error due to another API change (#23)
+
+0.7.3 (2015-06-16)
+------------------
+
+- Fixed previous broken release that does not contain CLI command 115
+
+0.7.2 (2015-06-16)
+------------------
+
+- Fixed getting download URL error due to API change (#23)
+
+0.7.1 (2015-06-15)
+------------------
+
+- Fixed argparse's required subparser behavior in Python 2.7 (http://bugs.python.org/issue9253)
+
+0.7.0 (2015-06-14)
+------------------
+
+- Added public methods: move, edit, mkdir (#13, #19)
+- Added Pro API support for getting download URL (#21)
+- Added ``receiver_directory``
+- Added logging utility and debugging hooks (#22)
+- Combined 115down and 115up into a single 115 commands
+- Supported Python 3.4 by removing ``__del__``
+
 0.6.0 (2015-05-17)
 ------------------
 

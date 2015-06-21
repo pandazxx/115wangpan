@@ -2,7 +2,9 @@
 from __future__ import print_function, absolute_import
 
 import humanize
+import inspect
 import json
+import logging
 import os
 import re
 import requests
@@ -65,26 +67,33 @@ class RequestHandler(object):
         r = self.session.post(url, data=data, params=params)
         return self._response_parser(r, expect_json=False)
 
-    def send(self, request):
+    def send(self, request, expect_json=True, ignore_content=False):
         """
         Send a formatted API request
 
         :param request: a formatted request object
         :type request: :class:`.Request`
+        :param bool expect_json: if True, raise :class`.InvalidAPIAccess` if
+            response is not in JSON format
+        :param bool ignore_content: whether to ignore setting content of the
+            Response object
         """
         r = self.session.request(method=request.method,
                                  url=request.url,
                                  params=request.params,
                                  data=request.data,
-                                 files=request.files)
-        return self._response_parser(r)
+                                 files=request.files,
+                                 headers=request.headers)
+        return self._response_parser(r, expect_json, ignore_content)
 
-    def _response_parser(self, r, expect_json=True):
+    def _response_parser(self, r, expect_json=True, ignore_content=False):
         """
         :param :class:`requests.Response` r: a response object of the Requests
             library
         :param bool expect_json: if True, raise :class`.InvalidAPIAccess` if
             response is not in JSON format
+        :param bool ignore_content: whether to ignore setting content of the
+            Response object
         """
         if r.ok:
             try:
@@ -93,9 +102,15 @@ class RequestHandler(object):
             except ValueError:
                 # No JSON-encoded data returned
                 if expect_json:
-                    print(r.content)
+                    logger = logging.getLogger(conf.LOGGING_API_LOGGER)
+                    logger.debug(r.text)
                     raise InvalidAPIAccess('Invalid API access.')
-                return Response(False, r.content)
+                # Raw response
+                if ignore_content:
+                    res = Response(True, None)
+                else:
+                    res = Response(True, r.text)
+                return res
         else:
             r.raise_for_status()
 
@@ -122,6 +137,16 @@ class Request(object):
         self.data = data
         self.files = files
         self.headers = headers
+        self._debug()
+
+    def _debug(self):
+        logger = logging.getLogger(conf.LOGGING_API_LOGGER)
+        level = logger.getEffectiveLevel()
+        if level == logging.DEBUG:
+            func = inspect.stack()[2][3]
+            msg = conf.DEBUG_REQ_FMT % (func, self.url, self.method,
+                                        self.params, self.data)
+            logger.debug(msg)
 
 
 class Response(object):
@@ -135,6 +160,15 @@ class Response(object):
     def __init__(self, state, content):
         self.state = state
         self.content = content
+        self._debug()
+
+    def _debug(self):
+        logger = logging.getLogger(conf.LOGGING_API_LOGGER)
+        level = logger.getEffectiveLevel()
+        if level == logging.DEBUG:
+            func = inspect.stack()[4][3]
+            msg = conf.DEBUG_RES_FMT % (func, self.state, self.content)
+            logger.debug(msg)
 
 
 class API(object):
@@ -147,11 +181,14 @@ class API(object):
     :cvar int num_tasks_per_page: default number of tasks per page/request
     :cvar str web_api_url: files API url
     :cvar str aps_natsort_url: natural sort files API url
+    :cvar str proapi_url: pro API url for downloads
     """
 
     num_tasks_per_page = 30
     web_api_url = 'http://web.api.115.com/files'
     aps_natsort_url = 'http://aps.115.com/natsort/files.php'
+    proapi_url = 'http://proapi.115.com/app/chrome/down'
+    referer_url = 'http://115.com'
 
     def __init__(self, persistent=False,
                  cookies_filename=None, cookies_type='LWPCookieJar'):
@@ -175,7 +212,8 @@ class API(object):
         self.cookies_type = cookies_type
         self.passport = None
         self.http = RequestHandler()
-        # Cached variabled to decrease API hits
+        self.logger = logging.getLogger(conf.LOGGING_API_LOGGER)
+        # Cache attributes to decrease API hits
         self._user_id = None
         self._username = None
         self._signatures = {}
@@ -183,6 +221,7 @@ class API(object):
         self._lixian_timestamp = None
         self._root_directory = None
         self._downloads_directory = None
+        self._receiver_directory = None
         self._torrents_directory = None
         self._task_count = None
         self._task_quota = None
@@ -197,6 +236,7 @@ class API(object):
         self._lixian_timestamp = None
         self._root_directory = None
         self._downloads_directory = None
+        self._receiver_directory = None
         self._torrents_directory = None
         self._task_count = None
         self._task_quota = None
@@ -337,6 +377,13 @@ class API(object):
         if self._downloads_directory is None:
             self._load_downloads_directory()
         return self._downloads_directory
+
+    @property
+    def receiver_directory(self):
+        """Parent directory of the downloads directory"""
+        if self._receiver_directory is None:
+            self._receiver_directory = self.downloads_directory.parent
+        return self._receiver_directory
 
     @property
     def torrents_directory(self):
@@ -480,7 +527,7 @@ class API(object):
         return _instantiate_uploaded_file(self, data2)
 
     def download(self, obj, path=None, show_progress=True, resume=True,
-                 auto_retry=True):
+                 auto_retry=True, proapi=False):
         """
         Download a file
 
@@ -491,8 +538,10 @@ class API(object):
             identified by filename
         :param bool auto_retry: whether to retry automatically upon closed
             transfer until the file's download is finished
+        :param bool proapi: whether to use pro API
         """
-        download(obj.url, path=path, session=self.http.session,
+        url = obj.get_download_url(proapi)
+        download(url, path=path, session=self.http.session,
                  show_progress=show_progress, resume=resume,
                  auto_retry=auto_retry)
 
@@ -517,6 +566,80 @@ class API(object):
                 res.append(_instantiate_file(self, entry))
         return res
 
+    def move(self, entries, directory):
+        """
+        Move one or more entries (file or directory) to the destination
+        directory
+
+        :param list entries: a list of source entries (:class:`.BaseFile`
+            object)
+        :param directory: destination directory
+        :return: whether the action is successful
+        :raise: :class:`.APIError` if something bad happened
+        """
+        fcids = []
+        for entry in entries:
+            if isinstance(entry, File):
+                fcid = entry.fid
+            elif isinstance(entry, Directory):
+                fcid = entry.cid
+            else:
+                raise APIError('Invalid BaseFile instance for an entry.')
+            fcids.append(fcid)
+        if not isinstance(directory, Directory):
+            raise APIError('Invalid destination directory.')
+        if self._req_files_move(directory.cid, fcids):
+            for entry in entries:
+                if isinstance(entry, File):
+                    entry.cid = directory.cid
+                entry.reload()
+            return True
+        else:
+            raise APIError('Error moving entries.')
+
+    def edit(self, entry, name, mark=False):
+        """
+        Edit an entry (file or directory)
+
+        :param entry: :class:`.BaseFile` object
+        :param str name: new name for the entry
+        :param bool mark: whether to bookmark the entry
+        """
+        fcid = None
+        if isinstance(entry, File):
+            fcid = entry.fid
+        elif isinstance(entry, Directory):
+            fcid = entry.cid
+        else:
+            raise APIError('Invalid BaseFile instance for an entry.')
+        is_mark = 0
+        if mark is True:
+            is_mark = 1
+        if self._req_files_edit(fcid, name, is_mark):
+            entry.reload()
+            return True
+        else:
+            raise APIError('Error editing the entry.')
+
+    def mkdir(self, parent, name):
+        """
+        Create a directory
+
+        :param parent: the parent directory
+        :param str name: the name of the new directory
+        :return: the new directory
+        :rtype: :class:`.Directory`
+
+        """
+        pid = None
+        cid = None
+        if isinstance(parent, Directory):
+            pid = parent.cid
+        else:
+            raise('Invalid Directory instance.')
+        cid = self._req_files_add(pid, name)['cid']
+        return self._load_directory(cid)
+
     def _req_offline_space(self):
         """Required before accessing lixian tasks"""
         url = 'http://115.com/'
@@ -535,6 +658,10 @@ class API(object):
             raise RequestFailure(msg)
 
     def _req_lixian_task_lists(self, page=1):
+        """
+        This request will cause the system to create a default downloads
+        directory if it does not exist
+        """
         url = 'http://115.com/lixian/'
         params = {'ct': 'lixian', 'ac': 'task_lists'}
         self._load_signatures()
@@ -590,7 +717,8 @@ class API(object):
         if res.state:
             return res.content
         else:
-            print(res.content.get('error_msg'))
+            msg = res.content.get('error_msg')
+            self.logger.error(msg)
             raise RequestFailure('Failed to open torrent.')
 
     def _req_lixian_add_task_bt(self, t):
@@ -616,7 +744,8 @@ class API(object):
         if res.state:
             return True
         else:
-            print(res.content.get('error_msg'))
+            msg = res.content.get('error_msg')
+            self.logger.error(msg)
             raise RequestFailure('Failed to create new task.')
 
     def _req_lixian_add_task_url(self, target_url):
@@ -635,7 +764,8 @@ class API(object):
         if res.state:
             return True
         else:
-            print(res.content.get('error_msg'))
+            msg = res.content.get('error_msg')
+            self.logger.error(msg)
             raise RequestFailure('Failed to create new task.')
 
     def _req_lixian_task_del(self, t):
@@ -655,6 +785,17 @@ class API(object):
             return True
         else:
             raise RequestFailure('Failed to delete the task.')
+
+    def _req_file_userfile(self):
+
+        url = 'http://115.com/'
+        params = {
+            'ct': 'file',
+            'ac': 'userfile',
+            'is_wl_tpl': 1,
+        }
+        req = Request(method='GET', url=url, params=params)
+        self.http.send(req, expect_json=False, ignore_content=True)
 
     def _req_aps_natsort_files(self, cid, offset, limit, o='file_name',
                                asc=1, aid=1, show_dir=1, code=None, scid=None,
@@ -724,7 +865,7 @@ class API(object):
         req = Request(method='POST', url=url, data=data)
         res = self.http.send(req)
         if res.state:
-            return res.content
+            return True
         else:
             raise RequestFailure('Failed to access files API.')
 
@@ -747,7 +888,7 @@ class API(object):
     def _req_files_move(self, pid, fids):
         """
         Move files or directories
-        :param str pid: target directory id
+        :param str pid: destination directory id
         :param list fids: a list of ids of files or directories to be moved
         """
         url = self.web_api_url + '/move'
@@ -758,7 +899,7 @@ class API(object):
         req = Request(method='POST', url=url, data=data)
         res = self.http.send(req)
         if res.state:
-            return res.content
+            return True
         else:
             raise RequestFailure('Failed to access files API.')
 
@@ -789,13 +930,27 @@ class API(object):
         else:
             raise RequestFailure('No directory found.')
 
-    def _req_files_download_url(self, pickcode):
-        url = self.web_api_url + '/download'
-        params = {'pickcode': pickcode, '_': get_timestamp(13)}
-        req = Request(method='GET', url=url, params=params)
+    def _req_files_download_url(self, pickcode, proapi=False):
+        if '_115_curtime' not in self.cookies:
+            self._req_file_userfile()
+        if not proapi:
+            url = self.web_api_url + '/download'
+            params = {'pickcode': pickcode, '_': get_timestamp(13)}
+        else:
+            url = self.proapi_url
+            params = {'pickcode': pickcode, 'method': 'get_file_url'}
+        headers = {
+            'Referer': self.referer_url,
+        }
+        req = Request(method='GET', url=url, params=params,
+                      headers=headers)
         res = self.http.send(req)
         if res.state:
-            return res.content['file_url']
+            if not proapi:
+                return res.content['file_url']
+            else:
+                fid = res.content['data'].keys()[0]
+                return res.content['data'][fid]['url']['url']
         else:
             raise RequestFailure('Failed to get download URL.')
 
@@ -850,7 +1005,7 @@ class API(object):
             if 'errno' in res.content:
                 if res.content['errno'] == 990005:
                     raise JobError()
-            print(res.content['error'])
+            self.logger.error(res.content['error'])
             raise APIError(msg)
 
     def _req_get_user_aq(self):
@@ -1067,25 +1222,21 @@ class BaseFile(Base):
     def move(self, directory):
         """
         Move this file or directory to the destination directory
+
         :param directory: destination directory
         :return: whether the action is successful
         :raise: :class:`.APIError` if something bad happened
         """
-        fcid = None
-        pid = None
+        self.api.move([self], directory)
 
-        if isinstance(self, File):
-            fcid = self.fid
-        elif isinstance(self, Directory):
-            fcid = self.cid
-        else:
-            raise APIError('Invalid BaseFile instance.')
-        pid = directory.cid
+    def edit(self, name, mark=False):
+        """
+        Edit this file or directory
 
-        if self.api._req_files_move(pid, [fcid]):
-            return True
-        else:
-            raise APIError('Error in moving file/directory.')
+        :param str name: new name for this entry
+        :param bool mark: whether to bookmark this entry
+        """
+        self.api.edit(self, name, mark)
 
     @property
     def parent(self):
@@ -1111,6 +1262,17 @@ class BaseFile(Base):
         return "/".join(node_list)
 
 
+    def __eq__(self, other):
+        if isinstance(self, File):
+            if isinstance(other, File):
+                return self.fid == other.fid
+        elif isinstance(self, Directory):
+            if isinstance(other, Directory):
+                return self.cid == other.cid
+        return False
+
+    def __ne__(self, other):
+        return not self.__eq__(other)
 
     def __unicode__(self):
         return self.name
@@ -1162,22 +1324,28 @@ class File(BaseFile):
             self._directory = self.api._load_directory(self.cid)
         return self._directory
 
-    def get_download_url(self):
-        """Get this file's download URL"""
+    def get_download_url(self, proapi=False):
+        """
+        Get this file's download URL
+
+        :param bool proapi: whether to use pro API
+
+        """
         if self._download_url is None:
             self._download_url = \
-                self.api._req_files_download_url(self.pickcode)
+                self.api._req_files_download_url(self.pickcode, proapi)
         return self._download_url
 
     @property
     def url(self):
-        """Alias for :meth:`.File.get_download_url`"""
+        """Alias for :meth:`.File.get_download_url` with `proapi=False`"""
         return self.get_download_url()
 
     def download(self, path=None, show_progress=True, resume=True,
-                 auto_retry=True):
+                 auto_retry=True, proapi=False):
         """Download this file"""
-        self.api.download(self, path, show_progress, resume, auto_retry)
+        self.api.download(self, path, show_progress, resume, auto_retry,
+                          proapi)
 
     @property
     def is_torrent(self):
@@ -1193,6 +1361,21 @@ class File(BaseFile):
         """
         if self.is_torrent:
             return self.api._load_torrent(self)
+
+    def reload(self):
+        """
+        Reload file info and metadata
+
+        * name
+        * sha
+        * pickcode
+
+        """
+        res = self.api._req_file(self.fid)
+        data = res['data'][0]
+        self.name = data['file_name']
+        self.sha = data['sha1']
+        self.pickcode = data['pick_code']
 
 
 class Directory(BaseFile):
@@ -1291,7 +1474,8 @@ class Directory(BaseFile):
         loaded_entries = [
             entry for entry in res['data'][:count]
         ]
-        total_count = res['count']
+        #total_count = res['count']
+        total_count = self.count
         # count should never be greater than total_count
         if count > total_count:
             count = total_count
@@ -1330,6 +1514,7 @@ class Directory(BaseFile):
         """
         if self.cid is None:
             return False
+        self.reload()
         kwargs = {}
         # `cid` is the only required argument
         kwargs['cid'] = self.cid
@@ -1337,6 +1522,21 @@ class Directory(BaseFile):
         kwargs['show_dir'] = 1 if show_dir is True else 0
         kwargs['natsort'] = 1 if natsort is True else 0
         kwargs['o'] = order
+
+        # When the downloads directory exists along with its parent directory,
+        # the receiver directory, its parent's count (receiver directory's
+        # count) does not include the downloads directory. This behavior is
+        # similar to its parent's parent (root), the count of which does not
+        # include the receiver directory.
+        # The following code fixed this behavior so that a directory's
+        # count correctly reflects the actual number of entries in it
+        # The side-effect that this code may ensure that downloads directory
+        # exists, causing the system to create the receiver directory and
+        # downloads directory, if they do not exist.
+
+        if self.is_root or self == self.api.receiver_directory:
+            self._count += 1
+
         if self.count <= count:
             # count should never be greater than self.count
             count = self.count
@@ -1358,6 +1558,12 @@ class Directory(BaseFile):
             else:
                 res.append(_instantiate_file(self.api, entry))
         return res
+
+    def mkdir(self, name):
+        """
+        Create a new directory in this directory
+        """
+        self.api.mkdir(self, name)
 
 
 class Task(Base):
