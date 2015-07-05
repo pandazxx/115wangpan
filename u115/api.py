@@ -392,7 +392,28 @@ class API(object):
             self._load_torrents_directory()
         return self._torrents_directory
 
+    def get_entry_by_path(self, path):
+        components = path.split("/")
+        curr_entry = self.root_directory
+        for c in components:
+            if len(c) == 0:
+                continue
+            if not curr_entry.is_dir():
+                return None
+            for f in curr_entry.list(count=curr_entry.count):
+                if f.name == c:
+                    curr_entry = f
+                    break
+            else:
+                return None
+        return curr_entry
+
+
     def find_directory(self, path):
+        '''Obsolete, use get_entry_by_path instead
+        :param path: path of directory
+        :return: the directory object
+        '''
         components = path.split("/")
         curr_dir = self.root_directory
         for c in components:
